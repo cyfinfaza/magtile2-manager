@@ -32,7 +32,7 @@
 	function assignPathValue(str, obj = {}) {
 		try {
 			const parts = str.trim().split(/\s+/);
-			const value = parseFloat(parts.pop());
+			const value = JSON.parse(parts.pop());
 			const path = parts;
 
 			let current = obj;
@@ -56,7 +56,7 @@
 
 		try {
 			while (device && connected) {
-				const result = await device.transferIn(3, 64); // endpoint 3, 64 bytes
+				const result = await device.transferIn(3, 3000); // endpoint 3, 64 bytes
 				const decoder = new TextDecoder();
 				const text = decoder.decode(result.data);
 
