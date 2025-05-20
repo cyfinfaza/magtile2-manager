@@ -1,4 +1,5 @@
 <script>
+	import { decodeTileMessage } from "$lib/messageDecoder";
 	import { json } from "@sveltejs/kit";
 
 	let connected = false;
@@ -8,6 +9,29 @@
 
 	let data = $state({});
 
+	// --- Simple COBS Decoder ---
+	function cobsDecode(input) {
+		const output = [];
+		let i = 0;
+
+		while (i < input.length) {
+			const code = input[i++];
+			if (code === 0 || i + code - 1 > input.length) {
+				throw new Error("Malformed COBS input");
+			}
+
+			for (let j = 1; j < code; j++) {
+				output.push(input[i++]);
+			}
+
+			if (code < 0xff && i < input.length) {
+				output.push(0);
+			}
+		}
+		return new Uint8Array(output);
+	}
+
+	// --- Start WebUSB Reading Loop ---
 	async function connectToDevice() {
 		try {
 			device = await navigator.usb.requestDevice({
@@ -22,63 +46,62 @@
 
 			connected = true;
 			deviceName = `${device.productName}`;
-
 			startReading();
 		} catch (error) {
 			console.error("Connection failed:", error);
 		}
 	}
 
-	function assignPathValue(str, obj = {}) {
-		try {
-			const parts = str.trim().split(/\s+/);
-			const value = JSON.parse(parts.pop());
-			const path = parts;
+	// --- Hierarchical Data Insertion ---
+	function assignCOBSMessage(decoded) {
+		if (decoded.length < 2) return;
 
-			let current = obj;
-			for (let i = 0; i < path.length - 1; i++) {
-				if (!(path[i] in current)) {
-					current[path[i]] = {};
-				}
-				current = current[path[i]];
-			}
-			current[path[path.length - 1]] = value;
+		const addr = decoded[0];
 
-			return obj;
-		} catch (error) {
-			console.error("Error assigning path value:", error);
-			return obj;
+		const message = decodeTileMessage(decoded.slice(1));
+
+		if (message.error) {
+			console.error("Message decode error:", message.error);
+			return;
 		}
+
+		const { register, name, value } = message;
+
+		// we want data[addr][name] = value; but need to check if data[addr] exists
+		if (!data[addr]) {
+			data[addr] = {};
+		}
+		data[addr][name] = value;
 	}
 
+	// --- New COBS-aware Reading ---
 	async function startReading() {
-		let partialLine = ""; // Buffer to store incomplete lines between reads
-
+		let buffer = [];
+		let passedFirstDelimiter = false;
 		try {
 			while (device && connected) {
-				const result = await device.transferIn(3, 3000); // endpoint 3, 64 bytes
-				const decoder = new TextDecoder();
-				const text = decoder.decode(result.data);
+				const result = await device.transferIn(3, 2048);
+				const chunk = new Uint8Array(result.data.buffer);
 
-				// Combine with any previous partial line
-				const fullText = partialLine + text;
-				const lines = fullText.split("\n");
-
-				// The last line might be incomplete unless the text ends with a newline
-				partialLine = lines.pop() || "";
-
-				// Process complete lines
-				lines.forEach((line) => {
-					if (line.trim().length > 0) {
-						console.log("[WebUSB] Received:", line.trim());
-						assignPathValue(line, data);
-						console.log("[WebUSB] Parsed data:", data);
+				for (let byte of chunk) {
+					if (byte === 0x00) {
+						if (!passedFirstDelimiter) {
+							passedFirstDelimiter = true;
+							continue;
+						}
+						try {
+							const decoded = cobsDecode(Uint8Array.from(buffer));
+							assignCOBSMessage(decoded);
+							// console.log("[WebUSB] Decoded message:", decoded);
+							// console.log("[WebUSB] Parsed data:", data);
+						} catch (err) {
+							console.error("COBS decode error:", err);
+						}
+						buffer = [];
+					} else {
+						buffer.push(byte);
 					}
-				});
-
-				// If the text ended with a newline, the last element of lines would be
-				// an empty string and partialLine would be empty.
-				// If the text didn't end with a newline, partialLine now holds the incomplete line.
+				}
 			}
 		} catch (error) {
 			console.error("Read error:", error);
