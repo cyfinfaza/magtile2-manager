@@ -15,7 +15,7 @@
 	async function connectToDevice() {
 		try {
 			device = await navigator.usb.requestDevice({
-				filters: [{ vendorId: 0xcafe }]
+				filters: [{ vendorId: 0xc2c2, productId: 0x0f00 }]
 			});
 
 			await device.open();
