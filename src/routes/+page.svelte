@@ -1,7 +1,8 @@
 <script>
 	import { decodeTileMessage, decodeMasterMessage } from "$lib/messageDecoder";
 	import { json } from "@sveltejs/kit";
-	import { cobsDecode } from "$lib/cobs";
+	import { cobsDecode, cobsEncode } from "$lib/cobs";
+	import { onMount } from "svelte";
 
 	let connected = $state(false);
 	let deviceName = $state("Not connected");
@@ -63,6 +64,7 @@
 	async function startReading() {
 		let buffer = [];
 		let passedFirstDelimiter = false;
+		await device.transferOut(3, new Uint8Array([0x00])); // send 0x00 to clear device buffer
 		const startTime = performance.now();
 		let totalBytes = 0;
 		try {
@@ -99,18 +101,105 @@
 		}
 	}
 
+	// --- Send a message over USB (COBS encoded) ---
+	async function sendMessage(bytes) {
+		if (!device || !connected) {
+			console.warn("Device not connected.");
+			return;
+		}
+
+		try {
+			const message = new Uint8Array(bytes);
+			const cobsEncoded = cobsEncode(message);
+			const toSend = new Uint8Array([...cobsEncoded, 0x00]);
+			await device.transferOut(3, toSend);
+			console.log("Message sent:", toSend);
+		} catch (e) {
+			console.error("Send failed:", e);
+		}
+	}
+
 	let masterData = $derived(data[0]);
+
+	function arm() {
+		sendMessage([0x00, 0x20, 0x01]);
+	}
+
+	function disarm() {
+		sendMessage([0x00, 0x20, 0x00]);
+	}
+
+	function clear_faults() {
+		sendMessage([0x00, 0x21, 0x01]);
+	}
+
+	function getMasterButtonState() {
+		if (!masterData) return { status: "Unavailable", class: "", function: null };
+
+		if (masterData.power_switch_status?.hv_relay_on) {
+			return { status: "Armed", action: "Click to Disarm", class: "blue", function: disarm };
+		} else if (
+			!masterData.power_switch_status?.hv_relay_on &&
+			masterData.power_switch_status?.precharge_ssr_on
+		) {
+			return { status: "Precharging", action: "Click to Disarm", class: "cyan", function: disarm };
+		} else if (masterData.power_switch_status?.hv_ready) {
+			return { status: "Ready", action: "Click to Arm", class: "green", function: arm };
+		} else if (masterData.power_switch_status?.hv_shutdown_from_fault) {
+			return {
+				status: "Disabled Due to Faults",
+				action: "Click to Clear Faults",
+				class: "red",
+				function: clear_faults
+			};
+		} else {
+			const faults = { ...(masterData.power_system_faults || {}) };
+
+			// Clear non-critical faults
+			delete faults.uv_5v;
+			delete faults.uv_12v;
+			delete faults.efuse_12v_fault;
+
+			const hasCriticalFault = Object.values(faults).some(Boolean);
+
+			if (hasCriticalFault) {
+				return {
+					status: "Not Ready: Critical Issue",
+					action: "Arming Unavailable",
+					class: "red",
+					function: null
+				};
+			} else if (masterData.power_system_faults?.uv_5v && masterData.power_system_faults?.uv_12v) {
+				return {
+					status: "Not Ready: 12V Power Disconnected",
+					action: "Arming Unavailable",
+					class: "yellow",
+					function: null
+				};
+			} else {
+				return {
+					status: "Not Ready: Critical Issue",
+					action: "Arming Unavailable",
+					class: "red",
+					function: null
+				};
+			}
+		}
+	}
+
+	// make derived state for button state
+	const buttonState = $derived.by(getMasterButtonState);
+
+	onMount(() => {
+		window.sendUSBMessage = sendMessage;
+		window.getMasterButtonState = getMasterButtonState;
+	});
 </script>
 
 <main>
 	<div class="masterPanel">
 		<h1 class="text-xl font-bold">MagTile2 Manager</h1>
-		<button
-			class:green={connected}
-			class:red={!connected}
-			on:click={connectToDevice}
-			disabled={connected}
-		>
+		<button onclick={connectToDevice} disabled={connected}>
 			{connected ? "Connected" : "Connect to Device"}
 		</button>
 
@@ -122,6 +211,22 @@
 		<p>
 			Speed: {(Math.round(speed) / 1000000) * 8} Mb/s
 		</p> -->
+		<div class="dataBox">
+			<h2 style="text-align: center">Master Control</h2>
+			<button
+				class:accent={connected}
+				class={buttonState.class}
+				onclick={buttonState.function}
+				disabled={!connected}
+			>
+				{#if connected}
+					{buttonState.status} <br />
+					{buttonState.action}
+				{:else}
+					Not Connected
+				{/if}
+			</button>
+		</div>
 		<div class="dataBox">
 			<h2 style="text-align: center">Power Rails</h2>
 			<h3>Input Rails</h3>

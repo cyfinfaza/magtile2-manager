@@ -18,3 +18,21 @@ export function cobsDecode(input) {
 	}
 	return new Uint8Array(output);
 }
+
+export function cobsEncode(input) {
+	const output = [];
+	let blockStart = 0;
+
+	for (let i = 0; i <= input.length; i++) {
+		if (i === input.length || input[i] === 0) {
+			const blockLength = i - blockStart + 1;
+			output.push(blockLength);
+			for (let j = blockStart; j < i; j++) {
+				output.push(input[j]);
+			}
+			blockStart = i + 1;
+		}
+	}
+
+	return new Uint8Array(output);
+}
