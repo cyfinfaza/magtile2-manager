@@ -475,12 +475,39 @@
 		</div>
 	</div>
 	<div class="tileViewer">
-		<pre>
-			{JSON.stringify(data, null, 2)}
-			{#if Object.keys(data).length === 0}
-				No data received yet.
-			{/if}
-		</pre>
+		{#each Object.keys(data)
+			.filter((key) => key != 0 && data?.[key]?.slave_status?.alive)
+			.sort((a, b) => a - b)
+			.map((key) => ({ id: key, ...data[key] })) as tile}
+			<div class="dataBox">
+				<h2 style="text-align: center">Tile ID: {tile.id}</h2>
+				<div>
+					<span>North</span>
+					<span>{tile.adj_north_addr}</span>
+				</div>
+				<div>
+					<span>East</span>
+					<span>{tile.adj_east_addr}</span>
+				</div>
+				<div>
+					<span>South</span>
+					<span>{tile.adj_south_addr}</span>
+				</div>
+				<div>
+					<span>West</span>
+					<span>{tile.adj_west_addr}</span>
+				</div>
+			</div>
+		{/each}
+		<details>
+			<summary>Full JSON</summary>
+			<pre>
+				{JSON.stringify(data, null, 2)}
+				{#if Object.keys(data).length === 0}
+					No data received yet.
+				{/if}
+			</pre>
+		</details>
 	</div>
 </main>
 
@@ -503,7 +530,10 @@
 	}
 	.tileViewer {
 		flex: 1;
+		display: flex;
+		flex-direction: column;
 		padding: var(--spacing);
+		gap: var(--spacing);
 		overflow: auto;
 	}
 	.dataBox {
