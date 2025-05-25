@@ -190,9 +190,86 @@
 	// make derived state for button state
 	const buttonState = $derived.by(getMasterButtonState);
 
+	// only alive tiles
+	const aliveTiles = $derived.by(() =>
+		Object.keys(data)
+			.filter((key) => key != 0 && data?.[key]?.slave_status?.alive)
+			.sort((a, b) => a - b)
+			.map((key) => ({ id: key, ...data[key] }))
+	);
+
+	const tileCoordinates = $derived.by(() => {
+		let output = {};
+		let minX = Infinity,
+			minY = Infinity;
+		let maxX = -Infinity,
+			maxY = -Infinity;
+
+		if (aliveTiles.length > 0) {
+			function dfsPlace(tileId, x, y) {
+				const tile = data[tileId];
+				if (tileId && !output[tileId] && tile?.slave_status?.alive) {
+					output[tileId] = { x, y };
+					minX = Math.min(minX, x);
+					minY = Math.min(minY, y);
+					maxX = Math.max(maxX, x);
+					maxY = Math.max(maxY, y);
+
+					dfsPlace(tile.adj_north_addr, x, y - 1);
+					dfsPlace(tile.adj_east_addr, x + 1, y);
+					dfsPlace(tile.adj_south_addr, x, y + 1);
+					dfsPlace(tile.adj_west_addr, x - 1, y);
+				}
+			}
+
+			dfsPlace(aliveTiles[0].id, 0, 0);
+
+			const shiftX = -minX;
+			const shiftY = -minY;
+
+			for (const id in output) {
+				output[id].x += shiftX;
+				output[id].y += shiftY;
+			}
+
+			maxX += shiftX;
+			maxY += shiftY;
+		}
+
+		return {
+			...output,
+			width: maxX + 1,
+			height: maxY + 1
+		};
+	});
+
+	let { minTemp, maxTemp } = $derived.by(() => {
+		let min = Infinity;
+		let max = -Infinity;
+
+		for (const tile of aliveTiles) {
+			for (let i = 1; i <= 9; i++) {
+				const temp = tile["coil_" + i + "_temp"];
+				if (temp < min) min = temp;
+				if (temp > max) max = temp;
+			}
+		}
+		max = Math.max(max, 35);
+		return { minTemp: min, maxTemp: max };
+	});
+
 	onMount(() => {
+		// console.log a message highlighted in green saying Type (bold)data(bold) to see full data report
+		console.log(
+			"%cCall %cdata()%c to see full data report",
+			"color: black; background: #0F4; font-size: 1.2em;",
+			"color: black; background: #0F4; font-size: 1.2em; font-weight: bold;",
+			"color: black; background: #0F4; font-size: 1.2em;"
+		);
 		window.sendUSBMessage = sendMessage;
 		window.getMasterButtonState = getMasterButtonState;
+		window.tileCoordinates = tileCoordinates;
+		window.data = () => $state.snapshot(data);
 	});
 </script>
 
@@ -474,11 +551,47 @@
 			</div>
 		</div>
 	</div>
-	<div class="tileViewer">
-		{#each Object.keys(data)
-			.filter((key) => key != 0 && data?.[key]?.slave_status?.alive)
-			.sort((a, b) => a - b)
-			.map((key) => ({ id: key, ...data[key] })) as tile}
+	<div
+		class="tileViewer"
+		style:--tiles-width={tileCoordinates.width}
+		style:--tiles-height={tileCoordinates.height}
+	>
+		<!-- <div class="dataBox">
+			<pre>
+				{#if Object.keys(tileCoordinates).length > 0}
+					{JSON.stringify(tileCoordinates, null, 2)}
+				{:else}
+					No tile coordinates available.
+				{/if}
+			</pre>
+		</div> -->
+		<div class="tileGrid">
+			{#each aliveTiles as tile}
+				<div
+					class="tile"
+					style:grid-column={tileCoordinates[tile.id].x + 1}
+					style:grid-row={tileCoordinates[tile.id].y + 1}
+				>
+					<!-- <h2>Tile ID: {tile.id}</h2> -->
+					<!-- 9 coil divs, show temp, current_reading, and setpoint (rounded to 2 decimal places) -->
+					{#each Array(9) as _, i}
+						<div
+							class="coil"
+							style:--temp-level={(tile["coil_" + (i + 1) + "_temp"] - minTemp) /
+								(maxTemp - minTemp)}
+						>
+							{Math.round(tile["coil_" + (i + 1) + "_temp"] / 100)} °C <br />
+							Set {tile["coil_" + (i + 1) + "_setpoint"]?.toFixed(2)} A <br />
+							{tile["coil_" + (i + 1) + "_current_reading"]?.toFixed(2)} A
+						</div>
+					{/each}
+					<div class="tileIdLabel">
+						{tile.id}
+					</div>
+				</div>
+			{/each}
+		</div>
+		<!-- {#each aliveTiles as tile}
 			<div class="dataBox">
 				<h2 style="text-align: center">Tile ID: {tile.id}</h2>
 				<div>
@@ -498,8 +611,8 @@
 					<span>{tile.adj_west_addr}</span>
 				</div>
 			</div>
-		{/each}
-		<details>
+		{/each} -->
+		<!-- <details>
 			<summary>Full JSON</summary>
 			<pre>
 				{JSON.stringify(data, null, 2)}
@@ -507,7 +620,11 @@
 					No data received yet.
 				{/if}
 			</pre>
-		</details>
+		</details> -->
+	</div>
+	<div class="tilePanel">
+		<h1>Tile Panel</h1>
+		<p>Tile panel content goes here.</p>
 	</div>
 </main>
 
@@ -519,7 +636,7 @@
 		overflow: hidden;
 	}
 	.masterPanel {
-		width: min(500px, max(25%, 300px));
+		width: min(400px, max(25%, 300px));
 		background: var(--fg);
 		border-right: 2px solid var(--fg);
 		padding: var(--spacing);
@@ -531,10 +648,65 @@
 	.tileViewer {
 		flex: 1;
 		display: flex;
-		flex-direction: column;
+		align-items: flex-start;
+		justify-content: flex-start;
 		padding: var(--spacing);
+		overflow: auto;
+	}
+	.tilePanel {
+		width: min(400px, max(25%, 300px));
+		background: var(--fg);
+		border-left: 2px solid var(--fg);
+		padding: var(--spacing);
+		display: flex;
+		flex-direction: column;
 		gap: var(--spacing);
 		overflow: auto;
+	}
+	.tileGrid {
+		display: grid;
+		// width: 100%;
+		// height: 100%;
+		--tile-size: 200px;
+		// max-width: calc(var(--tile-size) * var(--tiles-width));
+		// max-height: calc(var(--tile-size) * var(--tiles-height));
+		grid-template-columns: repeat(var(--coils-width), auto);
+		grid-template-rows: repeat(var(--coils-height), auto);
+		// overflow: hidden;
+		gap: 1px;
+		.tile {
+			aspect-ratio: 1;
+			width: var(--tile-size);
+			// max-width: var(--tile-size);
+			background: var(--fg);
+			border: 2px solid var(--fg2);
+			border-radius: var(--spacing);
+			display: grid;
+			grid-template-columns: repeat(3, 1fr);
+			grid-template-rows: repeat(3, 1fr);
+			gap: 4%;
+			padding: 2%;
+			position: relative;
+			> .coil {
+				background: var(--fg);
+				background: hsl(calc(var(--temp-level) * 120 + 240), 100%, 30%);
+				border-radius: 50%;
+				display: flex;
+				justify-content: center;
+				align-items: center;
+				transition: background-color 0.5s;
+				font-size: 0.7em;
+				text-align: center;
+				line-height: 1em;
+			}
+			.tileIdLabel {
+				position: absolute;
+				top: 66.7%;
+				left: 66.7%;
+				font-weight: bold;
+				transform: translate(-50%, -50%);
+			}
+		}
 	}
 	.dataBox {
 		display: flex;
