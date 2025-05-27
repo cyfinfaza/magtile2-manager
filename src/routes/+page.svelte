@@ -11,6 +11,10 @@
 
 	let data = $state({});
 
+	let selectedTile = $state(null);
+	let selectedCoilIndex = $state(null);
+	let selectedSetpoint = $state(null);
+
 	// --- Start WebUSB Reading Loop ---
 	async function connectToDevice() {
 		try {
@@ -110,10 +114,11 @@
 
 		try {
 			const message = new Uint8Array(bytes);
+			console.log("Sending message (pre-cobs):", message);
 			const cobsEncoded = cobsEncode(message);
 			const toSend = new Uint8Array([...cobsEncoded, 0x00]);
 			await device.transferOut(3, toSend);
-			console.log("Message sent:", toSend);
+			console.log("Message sent (post-cobs):", toSend);
 		} catch (e) {
 			console.error("Send failed:", e);
 		}
@@ -277,7 +282,7 @@
 	<div class="masterPanel">
 		<h1 class="text-xl font-bold">MagTile2 Manager</h1>
 		<button onclick={connectToDevice} disabled={connected}>
-			{connected ? "Connected" : "Connect to Device"}
+			{connected ? "Connected" : "Connect to Master Tile"}
 		</button>
 
 		<!-- {#if connected}
@@ -566,11 +571,19 @@
 			</pre>
 		</div> -->
 		<div class="tileGrid">
+			{#if !aliveTiles || aliveTiles.length === 0}
+				<p>No MagTiles detected</p>
+			{/if}
 			{#each aliveTiles as tile}
 				<div
 					class="tile"
 					style:grid-column={tileCoordinates[tile.id].x + 1}
 					style:grid-row={tileCoordinates[tile.id].y + 1}
+					onclick={() => {
+						selectedTile = tile;
+						console.log("Selected tile:", selectedTile);
+					}}
+					class:selected={selectedTile?.id === tile.id}
 				>
 					<!-- <h2>Tile ID: {tile.id}</h2> -->
 					<!-- 9 coil divs, show temp, current_reading, and setpoint (rounded to 2 decimal places) -->
@@ -579,10 +592,14 @@
 							class="coil"
 							style:--temp-level={(tile["coil_" + (i + 1) + "_temp"] - minTemp) /
 								(maxTemp - minTemp)}
+							onclick={() => {
+								selectedCoilIndex = i + 1;
+							}}
+							class:selected={selectedCoilIndex === i + 1 && selectedTile?.id === tile.id}
 						>
 							{Math.round(tile["coil_" + (i + 1) + "_temp"] / 100)} °C <br />
-							Set {tile["coil_" + (i + 1) + "_setpoint"]?.toFixed(2)} A <br />
-							{tile["coil_" + (i + 1) + "_current_reading"]?.toFixed(2)} A
+							Set {(tile["coil_" + (i + 1) + "_setpoint"] / 1000)?.toFixed(2)} A <br />
+							{(tile["coil_" + (i + 1) + "_current_reading"] / 1000)?.toFixed(2)} A
 						</div>
 					{/each}
 					<div class="tileIdLabel">
@@ -623,8 +640,215 @@
 		</details> -->
 	</div>
 	<div class="tilePanel">
-		<h1>Tile Panel</h1>
-		<p>Tile panel content goes here.</p>
+		<h2>Tile Data</h2>
+		{#if selectedTile}
+			<!-- <div class="tile" style="font-size: 1.2em;">
+					{#each Array(9) as _, i}
+						<div
+							class="coil"
+							style:--temp-level={(selectedTile["coil_" + (i + 1) + "_temp"] - minTemp) /
+								(maxTemp - minTemp)}
+							onclick={() => {
+								selectedCoilIndex = i + 1;
+							}}
+						>
+							{Math.round(selectedTile["coil_" + (i + 1) + "_temp"] / 100)} °C <br />
+							Set {(selectedTile["coil_" + (i + 1) + "_setpoint"] / 1000)?.toFixed(3)} A <br />
+							{(selectedTile["coil_" + (i + 1) + "_current_reading"] / 1000)?.toFixed(3)} A
+						</div>
+					{/each}
+					<div class="tileIdLabel">
+						{selectedTile.id}
+					</div>
+				</div> -->
+			<div style="display: flex; flex-direction: column; gap: var(--spacing);">
+				<!-- labelled inputs for coil index, tile id, and setpoint, then button to send -->
+				<p>
+					Tile: <input type="number" disabled bind:value={selectedTile.id} min="1" max="255" />
+				</p>
+				<p>Coil: <input type="number" bind:value={selectedCoilIndex} min="1" max="9" /></p>
+				<p>
+					Setpoint: <input type="number" min="0" max="3" bind:value={selectedSetpoint} /> A (≤3)
+				</p>
+				<p>
+					<button
+						onclick={() => {
+							if (selectedTile && selectedCoilIndex && selectedSetpoint) {
+								const tileId = selectedTile.id;
+								const coilIndex = selectedCoilIndex - 1; // 0-indexed
+								const setpoint = Math.round(selectedSetpoint * 1000); // convert to mA
+								console.log("Sending setpoint:", tileId, coilIndex, setpoint);
+								// send message to tile
+								sendMessage([
+									0x00,
+									0x80,
+									tileId,
+									coilIndex,
+									setpoint & 0xff,
+									(setpoint >> 8) & 0xff
+								]);
+							}
+						}}
+					>
+						Set Setpoint
+					</button>
+					<!-- off button -->
+					<button
+						onclick={() => {
+							if (selectedTile && selectedCoilIndex) {
+								const tileId = selectedTile.id;
+								const coilIndex = selectedCoilIndex - 1; // 0-indexed
+								console.log("Turning off coil:", tileId, coilIndex);
+								sendMessage([0x00, 0x80, tileId, coilIndex, 0, 0]);
+							}
+						}}
+					>
+						Turn Off Coil
+					</button>
+				</p>
+			</div>
+			{#key data[selectedTile.id]}
+				<!-- <pre>{selectedTile && JSON.stringify(selectedTile, null, 2)}</pre> -->
+				<div class="dataBox">
+					<h2 style="text-align: center">Tile Status</h2>
+					<div>
+						<span>Alive</span>
+						<span
+							class:green-text={data[selectedTile.id]?.slave_status?.alive}
+							class:red-text={!data[selectedTile.id]?.slave_status?.alive}
+						>
+							{data[selectedTile.id]?.slave_status?.alive ? "YES" : "NO"}
+						</span>
+					</div>
+					<div>
+						<span>Arm Ready</span>
+						<span
+							class:green-text={data[selectedTile.id]?.slave_status?.arm_ready}
+							class:red-text={!data[selectedTile.id]?.slave_status?.arm_ready}
+						>
+							{data[selectedTile.id]?.slave_status?.arm_ready ? "YES" : "NO"}
+						</span>
+					</div>
+					<div>
+						<span>Arm Active</span>
+						<span
+							class:green-text={data[selectedTile.id]?.slave_status?.arm_active}
+							class:red-text={!data[selectedTile.id]?.slave_status?.arm_active}
+						>
+							{data[selectedTile.id]?.slave_status?.arm_active ? "YES" : "NO"}
+						</span>
+					</div>
+					<div>
+						<span>Coils Nonzero</span>
+						<span
+							class:green-text={data[selectedTile.id]?.slave_status?.coils_nonzero}
+							class:red-text={!data[selectedTile.id]?.slave_status?.coils_nonzero}
+						>
+							{data[selectedTile.id]?.slave_status?.coils_nonzero ? "YES" : "NO"}
+						</span>
+					</div>
+				</div>
+				<div class="dataBox">
+					<h2 style="text-align: center">Tile Faults</h2>
+					<div>
+						<span>Overtemp Fault</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_faults?.temp_fault}
+							class:green-text={!data[selectedTile.id]?.slave_faults?.temp_fault}
+						>
+							{data[selectedTile.id]?.slave_faults?.temp_fault ? "FAULT" : "OK"}
+						</span>
+					</div>
+					<div>
+						<span>Current Spike Fault</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_faults?.current_spike_fault}
+							class:green-text={!data[selectedTile.id]?.slave_faults?.current_spike_fault}
+						>
+							{data[selectedTile.id]?.slave_faults?.current_spike_fault ? "FAULT" : "OK"}
+						</span>
+					</div>
+					<div>
+						<span>Vsense Fault</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_faults?.vsense_fault}
+							class:green-text={!data[selectedTile.id]?.slave_faults?.vsense_fault}
+						>
+							{data[selectedTile.id]?.slave_faults?.vsense_fault ? "FAULT" : "OK"}
+						</span>
+					</div>
+					<div>
+						<span>Invalid Value Fault</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_faults?.invalid_value_fault}
+							class:green-text={!data[selectedTile.id]?.slave_faults?.invalid_value_fault}
+						>
+							{data[selectedTile.id]?.slave_faults?.invalid_value_fault ? "FAULT" : "OK"}
+						</span>
+					</div>
+				</div>
+				<div class="dataBox">
+					<h2 style="text-align: center">Settings & Flags</h2>
+					<div>
+						<span>Identify Request</span>
+						<span>{data[selectedTile.id]?.slave_settings?.identify ? "TRUE" : "FALSE"}</span>
+					</div>
+					<div>
+						<span>Local Fault Clear</span>
+						<span
+							>{data[selectedTile.id]?.slave_settings?.local_fault_clear ? "TRUE" : "FALSE"}</span
+						>
+					</div>
+					<div>
+						<span>Global Arm</span>
+						<span>{data[selectedTile.id]?.global_state?.global_arm ? "TRUE" : "FALSE"}</span>
+					</div>
+					<div>
+						<span>Global Fault Clear</span>
+						<span>{data[selectedTile.id]?.global_state?.global_fault_clear ? "TRUE" : "FALSE"}</span
+						>
+					</div>
+				</div>
+				<div class="dataBox">
+					<h2 style="text-align: center">Power Monitoring</h2>
+					<div>
+						<span>5V Output</span>
+						<span>{data[selectedTile.id]?.v_sense_5?.toFixed(2)} V</span>
+					</div>
+					<div>
+						<span>12V Output</span>
+						<span>{data[selectedTile.id]?.v_sense_12?.toFixed(2)} V</span>
+					</div>
+					<div>
+						<span>48V Output</span>
+						<span>{data[selectedTile.id]?.v_sense_hv?.toFixed(2)} V</span>
+					</div>
+					<div>
+						<span>MCU Temperature</span>
+						<span>{data[selectedTile.id]?.mcu_temp} °C</span>
+					</div>
+				</div>
+				<div class="dataBox">
+					<h2 style="text-align: center">Adjacency</h2>
+					<div>
+						<span>North</span>
+						<span>{data[selectedTile.id]?.adj_north_addr}</span>
+					</div>
+					<div>
+						<span>East</span>
+						<span>{data[selectedTile.id]?.adj_east_addr}</span>
+					</div>
+					<div>
+						<span>South</span>
+						<span>{data[selectedTile.id]?.adj_south_addr}</span>
+					</div>
+					<div>
+						<span>West</span>
+						<span>{data[selectedTile.id]?.adj_west_addr}</span>
+					</div>
+				</div>
+			{/key}
+		{/if}
 	</div>
 </main>
 
@@ -674,38 +898,45 @@
 		grid-template-rows: repeat(var(--coils-height), auto);
 		// overflow: hidden;
 		gap: 1px;
-		.tile {
-			aspect-ratio: 1;
-			width: var(--tile-size);
-			// max-width: var(--tile-size);
+	}
+	.tile {
+		aspect-ratio: 1;
+		width: var(--tile-size);
+		// max-width: var(--tile-size);
+		background: var(--fg);
+		border: 2px solid var(--fg2);
+		border-radius: var(--spacing);
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		grid-template-rows: repeat(3, 1fr);
+		gap: 4%;
+		padding: 2%;
+		position: relative;
+		cursor: pointer;
+		&.selected {
+			border-color: var(--text);
+		}
+		> .coil {
 			background: var(--fg);
-			border: 2px solid var(--fg2);
-			border-radius: var(--spacing);
-			display: grid;
-			grid-template-columns: repeat(3, 1fr);
-			grid-template-rows: repeat(3, 1fr);
-			gap: 4%;
-			padding: 2%;
-			position: relative;
-			> .coil {
-				background: var(--fg);
-				background: hsl(calc(var(--temp-level) * 120 + 240), 100%, 30%);
-				border-radius: 50%;
-				display: flex;
-				justify-content: center;
-				align-items: center;
-				transition: background-color 0.5s;
-				font-size: 0.7em;
-				text-align: center;
-				line-height: 1em;
+			background: hsl(calc(var(--temp-level) * 120 + 240), 100%, 30%);
+			border-radius: 50%;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			transition: background-color 0.5s;
+			font-size: 0.7em;
+			text-align: center;
+			line-height: 1em;
+			&.selected {
+				border: 2px solid var(--text);
 			}
-			.tileIdLabel {
-				position: absolute;
-				top: 66.7%;
-				left: 66.7%;
-				font-weight: bold;
-				transform: translate(-50%, -50%);
-			}
+		}
+		.tileIdLabel {
+			position: absolute;
+			top: 66.7%;
+			left: 66.7%;
+			font-weight: bold;
+			transform: translate(-50%, -50%);
 		}
 	}
 	.dataBox {
