@@ -508,6 +508,15 @@
 					{masterData?.power_system_faults?.slave_fault ? "FAULT" : "OK"}
 				</span>
 			</div>
+			<div>
+				<span>Communication Timeout</span>
+				<span
+					class:red-text={masterData?.power_system_faults?.communication_fault}
+					class:green-text={!masterData?.power_system_faults?.communication_fault}
+				>
+					{masterData?.power_system_faults?.communication_fault ? "FAULT" : "OK"}
+				</span>
+			</div>
 		</div>
 
 		<div class="dataBox">
@@ -579,6 +588,7 @@
 					class="tile"
 					style:grid-column={tileCoordinates[tile.id].x + 1}
 					style:grid-row={tileCoordinates[tile.id].y + 1}
+					style:background={tile?.slave_status?.arm_ready ? undefined : "#F00"}
 					onclick={() => {
 						selectedTile = tile;
 						console.log("Selected tile:", selectedTile);
@@ -668,7 +678,14 @@
 				</p>
 				<p>Coil: <input type="number" bind:value={selectedCoilIndex} min="1" max="9" /></p>
 				<p>
-					Setpoint: <input type="number" min="0" max="3" bind:value={selectedSetpoint} /> A (≤3)
+					Setpoint: <input
+						type="number"
+						min="0"
+						max="3"
+						step="0.1"
+						width="10"
+						bind:value={selectedSetpoint}
+					/> A (≤3)
 				</p>
 				<p>
 					<button
@@ -747,6 +764,15 @@
 							{data[selectedTile.id]?.slave_status?.coils_nonzero ? "YES" : "NO"}
 						</span>
 					</div>
+					<div>
+						<span>Shutdown Reason</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_status?.shutdown_from_fault}
+							class:green-text={!data[selectedTile.id]?.slave_status?.shutdown_from_fault}
+						>
+							{data[selectedTile.id]?.slave_status?.shutdown_from_fault ? "FAULT" : "NORMAL"}
+						</span>
+					</div>
 				</div>
 				<div class="dataBox">
 					<h2 style="text-align: center">Tile Faults</h2>
@@ -784,6 +810,15 @@
 							class:green-text={!data[selectedTile.id]?.slave_faults?.invalid_value_fault}
 						>
 							{data[selectedTile.id]?.slave_faults?.invalid_value_fault ? "FAULT" : "OK"}
+						</span>
+					</div>
+					<div>
+						<span>Communication Timeout</span>
+						<span
+							class:red-text={data[selectedTile.id]?.slave_faults?.communication_fault}
+							class:green-text={!data[selectedTile.id]?.slave_faults?.communication_fault}
+						>
+							{data[selectedTile.id]?.slave_faults?.communication_fault ? "FAULT" : "OK"}
 						</span>
 					</div>
 				</div>
