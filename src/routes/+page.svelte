@@ -16,11 +16,20 @@
 	let selectedSetpoint = $state(null);
 
 	// --- Start WebUSB Reading Loop ---
-	async function connectToDevice() {
+	async function connectToDevice(prompt = true) {
 		try {
-			device = await navigator.usb.requestDevice({
-				filters: [{ vendorId: 0xc2c2, productId: 0x0f00 }]
-			});
+			if (prompt) {
+				device = await navigator.usb.requestDevice({
+					filters: [{ vendorId: 0xc2c2, productId: 0x0f00 }]
+				});
+			} else {
+				const devices = await navigator.usb.getDevices();
+				if (devices.length > 0) {
+					device = devices[0];
+				} else {
+					return;
+				}
+			}
 
 			await device.open();
 			if (device.configuration === null) {
@@ -275,6 +284,21 @@
 		window.getMasterButtonState = getMasterButtonState;
 		window.tileCoordinates = tileCoordinates;
 		window.data = () => $state.snapshot(data);
+		// interval to auto connect without prompt every 1 second, if not connected
+		const autoConnectInterval = setInterval(() => {
+			if (!connected) {
+				connectToDevice(false);
+			}
+		}, 1000);
+		// cleanup
+		return () => {
+			clearInterval(autoConnectInterval);
+			if (device && device.opened) {
+				device.close();
+			}
+			connected = false;
+			deviceName = "Not connected";
+		};
 	});
 </script>
 
