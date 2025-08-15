@@ -1,7 +1,7 @@
 {
 	"useTabs": true,
 	"trailingComma": "none",
-	"printWidth": 100,
+	"printWidth": 140,
 	"plugins": ["prettier-plugin-svelte"],
 	"overrides": [
 		{
