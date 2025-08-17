@@ -1,22 +1,9 @@
 const bitfieldTypes = {
 	MT2_Slave_Status: ["alive", "arm_ready", "arm_active", "coils_nonzero", "shutdown_from_fault"],
-	MT2_Slave_Faults: [
-		"temp_fault",
-		"current_spike_fault",
-		"vsense_fault",
-		"invalid_value_fault",
-		"communication_fault"
-	],
+	MT2_Slave_Faults: ["temp_fault", "current_spike_fault", "vsense_fault", "invalid_value_fault", "communication_fault", "address_conflict"],
 	MT2_Global_State: ["global_arm", "global_fault_clear"],
 	MT2_Slave_Settings: ["identify", "local_fault_clear"],
-	MT2_Master_HvSwitchStatus: [
-		"hv_relay_on",
-		"precharge_ssr_on",
-		"shdn_12_on",
-		"fault_12",
-		"hv_shutdown_from_fault",
-		"hv_ready"
-	],
+	MT2_Master_HvSwitchStatus: ["hv_relay_on", "precharge_ssr_on", "shdn_12_on", "fault_12", "hv_shutdown_from_fault", "hv_ready"],
 	MT2_Master_UsbInterfaceStatus: ["vendor_active", "cdc_active"],
 	MT2_Master_PowerSystemFaults: [
 		"ov_5v",

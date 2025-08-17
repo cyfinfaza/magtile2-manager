@@ -1,6 +1,6 @@
 <script>
 	import { decodeTileMessage, decodeMasterMessage } from "$lib/messageDecoder";
-	import { json } from "@sveltejs/kit";
+	import { fail, json } from "@sveltejs/kit";
 	import { cobsDecode, cobsEncode } from "$lib/cobs";
 	import { onMount } from "svelte";
 
@@ -11,6 +11,7 @@
 	let autoConnectActive = $state(true);
 
 	let webUsbAvailable = $state(true);
+	let unableToClaimDeviceError = $state(false);
 
 	let data = $state({});
 
@@ -40,7 +41,15 @@
 				if (device.configuration === null) {
 					await device.selectConfiguration(1);
 				}
-				await device.claimInterface(2);
+
+				try {
+					await device.claimInterface(2);
+					unableToClaimDeviceError = false;
+				} catch (error) {
+					unableToClaimDeviceError = true;
+					console.error("Unable to claim interface 2:", error);
+					return;
+				}
 
 				connected = true;
 				deviceName = `${device.productName}`;
@@ -257,11 +266,34 @@
 			maxY += shiftY;
 		}
 
+		// determine which tiles were unable to be placed
+		let unableToPlace = [];
+		for (const tile of aliveTiles) {
+			if (!output[tile.id]) {
+				unableToPlace.push(tile.id);
+			}
+		}
+
 		return {
-			...output,
+			byTileId: output,
 			width: maxX + 1,
-			height: maxY + 1
+			height: maxY + 1,
+			unableToPlace
 		};
+	});
+
+	const tileCoordinateConflict = $derived.by(() => {
+		const coords = Object.values(tileCoordinates.byTileId);
+		const seen = new Set();
+		for (const coord of coords) {
+			// console.log(coord);
+			const key = `${coord.x},${coord.y}`;
+			if (seen.has(key)) {
+				return true;
+			}
+			seen.add(key);
+		}
+		return false;
 	});
 
 	let { minTemp, maxTemp } = $derived.by(() => {
@@ -290,8 +322,10 @@
 		);
 		window.sendUSBMessage = sendMessage;
 		window.getMasterButtonState = getMasterButtonState;
-		window.tileCoordinates = tileCoordinates;
 		window.data = () => $state.snapshot(data);
+		window.tileCoordinates = () => $state.snapshot(tileCoordinates);
+		window.aliveTiles = () => $state.snapshot(aliveTiles);
+		window.buttonState = () => $state.snapshot(buttonState);
 		// interval to auto connect without prompt every 1 second, if not connected
 		const autoConnectInterval = setInterval(() => {
 			if (!connected && autoConnectActive) {
@@ -309,6 +343,10 @@
 		};
 	});
 </script>
+
+<svelte:head>
+	<title>{connected ? "🟢" : "🔴"} MagTile2 Manager</title>
+</svelte:head>
 
 {#snippet generic_entry(name, content, isRed, isGreen)}
 	<div>
@@ -360,22 +398,26 @@
 		>
 			<span style="text-align:start;">
 				{#if webUsbAvailable}
-					<svg
-						xmlns:svg="http://www.w3.org/2000/svg"
-						xmlns="http://www.w3.org/2000/svg"
-						version="1.0"
-						viewBox="0 0 475.248 228.092"
-						id="Layer_1"
-						xml:space="preserve"
-						style="height: 1.1ch; fill: var(--text);"
-						><defs id="defs1337" />
-						<path
-							d="M 462.836,114.054 L 412.799,85.158 L 412.799,105.771 L 157.046,105.771 L 206.844,53.159 C 211.082,49.762 216.627,47.379 222.331,47.247 C 245.406,47.247 259.109,47.241 264.153,47.231 C 267.572,56.972 276.756,64.003 287.674,64.003 C 301.486,64.003 312.695,52.795 312.695,38.978 C 312.695,25.155 301.487,13.951 287.674,13.951 C 276.756,13.951 267.572,20.978 264.153,30.711 L 222.821,30.704 C 211.619,30.704 199.881,36.85 192.41,44.055 C 192.614,43.841 192.826,43.613 192.398,44.059 C 192.24,44.237 139.564,99.873 139.564,99.873 C 135.335,103.265 129.793,105.633 124.093,105.769 L 95.161,105.769 C 91.326,86.656 74.448,72.256 54.202,72.256 C 31.119,72.256 12.408,90.967 12.408,114.043 C 12.408,137.126 31.119,155.838 54.202,155.838 C 74.452,155.838 91.33,141.426 95.165,122.297 L 123.59,122.297 C 123.663,122.297 123.736,122.301 123.81,122.297 L 186.681,122.297 C 192.37,122.442 197.905,124.813 202.13,128.209 C 202.13,128.209 254.794,183.841 254.957,184.021 C 255.379,184.468 255.169,184.235 254.961,184.025 C 262.432,191.229 274.175,197.371 285.379,197.371 L 325.211,197.362 L 325.211,214.139 L 375.261,214.139 L 375.261,164.094 L 325.211,164.094 L 325.211,180.849 C 325.211,180.849 314.72,180.83 284.891,180.83 C 279.186,180.699 273.635,178.319 269.399,174.922 L 219.59,122.3 L 412.799,122.3 L 412.799,142.946 L 462.836,114.054 z "
-							id="path1334"
-						/>
-					</svg>
-					&nbsp;
-					{connected ? "Connected" : "Connect to Master Tile"}
+					{#if unableToClaimDeviceError}
+						Unable to claim WebUSB interface. Another window may be connected.
+					{:else}
+						<svg
+							xmlns:svg="http://www.w3.org/2000/svg"
+							xmlns="http://www.w3.org/2000/svg"
+							version="1.0"
+							viewBox="0 0 475.248 228.092"
+							id="Layer_1"
+							xml:space="preserve"
+							style="height: 1.1ch; fill: var(--text);"
+							><defs id="defs1337" />
+							<path
+								d="M 462.836,114.054 L 412.799,85.158 L 412.799,105.771 L 157.046,105.771 L 206.844,53.159 C 211.082,49.762 216.627,47.379 222.331,47.247 C 245.406,47.247 259.109,47.241 264.153,47.231 C 267.572,56.972 276.756,64.003 287.674,64.003 C 301.486,64.003 312.695,52.795 312.695,38.978 C 312.695,25.155 301.487,13.951 287.674,13.951 C 276.756,13.951 267.572,20.978 264.153,30.711 L 222.821,30.704 C 211.619,30.704 199.881,36.85 192.41,44.055 C 192.614,43.841 192.826,43.613 192.398,44.059 C 192.24,44.237 139.564,99.873 139.564,99.873 C 135.335,103.265 129.793,105.633 124.093,105.769 L 95.161,105.769 C 91.326,86.656 74.448,72.256 54.202,72.256 C 31.119,72.256 12.408,90.967 12.408,114.043 C 12.408,137.126 31.119,155.838 54.202,155.838 C 74.452,155.838 91.33,141.426 95.165,122.297 L 123.59,122.297 C 123.663,122.297 123.736,122.301 123.81,122.297 L 186.681,122.297 C 192.37,122.442 197.905,124.813 202.13,128.209 C 202.13,128.209 254.794,183.841 254.957,184.021 C 255.379,184.468 255.169,184.235 254.961,184.025 C 262.432,191.229 274.175,197.371 285.379,197.371 L 325.211,197.362 L 325.211,214.139 L 375.261,214.139 L 375.261,164.094 L 325.211,164.094 L 325.211,180.849 C 325.211,180.849 314.72,180.83 284.891,180.83 C 279.186,180.699 273.635,178.319 269.399,174.922 L 219.59,122.3 L 412.799,122.3 L 412.799,142.946 L 462.836,114.054 z "
+								id="path1334"
+							/>
+						</svg>
+						&nbsp;
+						{connected ? "Connected" : "Connect to Master Tile"}
+					{/if}
 				{:else}
 					WebUSB is not available. Ensure you are using the latest version of Chrome or Edge.
 				{/if}
@@ -437,8 +479,8 @@
 			{@render fault_entry("12V PMIC Fault", masterData?.power_system_faults?.efuse_12v_fault)}
 			{@render fault_entry("Master Tile Overtemperature", masterData?.power_system_faults?.master_overtemp)}
 			{@render fault_entry("Precharge Fault", masterData?.power_system_faults?.precharge_fault)}
-			{@render fault_entry("Slave Tile Fault", masterData?.power_system_faults?.slave_fault)}
 			{@render fault_entry("Communication Timeout", masterData?.power_system_faults?.communication_fault)}
+			{@render fault_entry("Slave Tile Fault", masterData?.power_system_faults?.slave_fault)}
 		</div>
 
 		<div class="dataBox">
@@ -459,6 +501,12 @@
 		style:--tiles-width={tileCoordinates.width}
 		style:--tiles-height={tileCoordinates.height}
 	>
+		{#if tileCoordinates.unableToPlace.length > 0}
+			<p>❓ Unable to locate tile</p>
+		{/if}
+		{#if tileCoordinateConflict}
+			<p>⚠️ Tile placement conflict detected</p>
+		{/if}
 		<div class="tileGrid">
 			{#if !aliveTiles || aliveTiles.length === 0}
 				<p>No MagTiles detected</p>
@@ -466,8 +514,8 @@
 			{#each aliveTiles as tile}
 				<div
 					class="tile"
-					style:grid-column={tileCoordinates[tile.id].x + 1}
-					style:grid-row={tileCoordinates[tile.id].y + 1}
+					style:grid-column={tileCoordinates.byTileId?.[tile.id]?.x + 1 || undefined}
+					style:grid-row={tileCoordinates.byTileId?.[tile.id]?.y + 1 || undefined}
 					style:background={tile?.slave_status?.arm_ready ? undefined : "#F00"}
 					onclick={() => {
 						selectedTile = tile;
@@ -493,6 +541,11 @@
 					{/each}
 					<div class="tileIdLabel">
 						{tile.id}
+					</div>
+					<div class="tileWarningIcon">
+						{#if tileCoordinates.unableToPlace.includes(tile.id)}
+							❓
+						{/if}
 					</div>
 				</div>
 			{/each}
@@ -564,6 +617,7 @@
 					{@render fault_entry("Current Spike", data[selectedTile.id]?.slave_faults?.current_spike_fault)}
 					{@render fault_entry("Invalid Input Voltage Rail", data[selectedTile.id]?.slave_faults?.vsense_fault)}
 					{@render fault_entry("Invalid Setpoint Received", data[selectedTile.id]?.slave_faults?.invalid_value_fault)}
+					{@render fault_entry("Address Conflict Detected", data[selectedTile.id]?.slave_faults?.address_conflict)}
 					{@render fault_entry("Communication Failure", data[selectedTile.id]?.slave_faults?.communication_fault)}
 				</div>
 				<div class="dataBox">
@@ -615,6 +669,8 @@
 		display: flex;
 		align-items: flex-start;
 		justify-content: flex-start;
+		flex-direction: column;
+		gap: var(--spacing);
 		padding: var(--spacing);
 		overflow: auto;
 		.notConnected & {
@@ -688,6 +744,15 @@
 			left: 66.7%;
 			font-weight: bold;
 			transform: translate(-50%, -50%);
+			text-shadow: 0 0 4px #000;
+		}
+		.tileWarningIcon {
+			position: absolute;
+			top: 66.7%;
+			left: 33.3%;
+			font-weight: bold;
+			transform: translate(-50%, -50%);
+			text-shadow: 0 0 4px #000;
 		}
 	}
 	.dataBox {
