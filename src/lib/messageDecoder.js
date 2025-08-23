@@ -1,9 +1,17 @@
 const bitfieldTypes = {
 	MT2_Slave_Status: ["alive", "arm_ready", "arm_active", "coils_nonzero", "shutdown_from_fault"],
-	MT2_Slave_Faults: ["temp_fault", "current_spike_fault", "vsense_fault", "invalid_value_fault", "communication_fault", "address_conflict"],
+	MT2_Slave_Faults: [
+		"temp_fault",
+		"current_spike_fault",
+		"vsense_fault",
+		"invalid_value_fault",
+		"communication_fault",
+		"address_conflict_fault",
+		"hv_sag_fault"
+	],
 	MT2_Global_State: ["global_arm", "global_fault_clear"],
 	MT2_Slave_Settings: ["identify", "local_fault_clear"],
-	MT2_Master_HvSwitchStatus: ["hv_relay_on", "precharge_ssr_on", "shdn_12_on", "fault_12", "hv_shutdown_from_fault", "hv_ready"],
+	MT2_Master_PowerSwitchStatus: ["hv_relay_on", "precharge_ssr_on", "shdn_12_on", "fault_12", "hv_shutdown_from_fault", "hv_ready"],
 	MT2_Master_UsbInterfaceStatus: ["vendor_active", "cdc_active"],
 	MT2_Master_PowerSystemFaults: [
 		"ov_5v",
@@ -29,10 +37,10 @@ const tileRegistryMap = {
 	0x06: { name: "global_state", type: "MT2_Global_State" },
 	0x07: { name: "slave_settings", type: "MT2_Slave_Settings" },
 
-	0x08: { name: "v_sense_5", type: "float" },
-	0x09: { name: "v_sense_12", type: "float" },
-	0x0a: { name: "v_sense_hv", type: "float" },
-	0x0b: { name: "mcu_temp", type: "uint16" },
+	0x08: { name: "v_sense_5", type: "float32" },
+	0x09: { name: "v_sense_12", type: "float32" },
+	0x0a: { name: "v_sense_hv", type: "float32" },
+	0x0b: { name: "master_v_sense_hv", type: "float32" },
 
 	0x0c: { name: "adj_west_addr", type: "uint8" },
 	0x0d: { name: "adj_north_addr", type: "uint8" },
@@ -65,11 +73,23 @@ const tileRegistryMap = {
 	0x35: { name: "coil_6_temp", type: "int16" },
 	0x36: { name: "coil_7_temp", type: "int16" },
 	0x37: { name: "coil_8_temp", type: "int16" },
-	0x38: { name: "coil_9_temp", type: "int16" }
+	0x38: { name: "coil_9_temp", type: "int16" },
+	0x40: { name: "coil_1_estimated_resistance", type: "int16" },
+	0x41: { name: "coil_2_estimated_resistance", type: "int16" },
+	0x42: { name: "coil_3_estimated_resistance", type: "int16" },
+	0x43: { name: "coil_4_estimated_resistance", type: "int16" },
+	0x44: { name: "coil_5_estimated_resistance", type: "int16" },
+	0x45: { name: "coil_6_estimated_resistance", type: "int16" },
+	0x46: { name: "coil_7_estimated_resistance", type: "int16" },
+	0x47: { name: "coil_8_estimated_resistance", type: "int16" },
+	0x48: { name: "coil_9_estimated_resistance", type: "int16" },
+
+	0xc0: { name: "mcu_temp", type: "uint16" },
+	0xc1: { name: "main_loop_freq", type: "uint32" }
 };
 
 const masterRegistryMap = {
-	0x10: { name: "power_switch_status", type: "MT2_Master_HvSwitchStatus" },
+	0x10: { name: "power_switch_status", type: "MT2_Master_PowerSwitchStatus" },
 	0x11: { name: "power_system_faults", type: "MT2_Master_PowerSystemFaults" },
 	0x12: { name: "usb_interface_status", type: "MT2_Master_UsbInterfaceStatus" },
 	0x13: { name: "global_state", type: "MT2_Global_State" },
@@ -78,14 +98,14 @@ const masterRegistryMap = {
 	0x21: { name: "clear_faults_requested", type: "uint8" },
 
 	0x30: { name: "mcu_temp", type: "int16" },
-	0x31: { name: "v_sense_5", type: "float" },
-	0x32: { name: "v_sense_12_in", type: "float" },
-	0x33: { name: "v_sense_12", type: "float" },
-	0x34: { name: "v_sense_hv_in", type: "float" },
-	0x35: { name: "v_sense_hv", type: "float" },
-	0x36: { name: "i_sense_5", type: "float" },
-	0x37: { name: "i_sense_12", type: "float" },
-	0x38: { name: "i_sense_hv", type: "float" }
+	0x31: { name: "v_sense_5", type: "float32" },
+	0x32: { name: "v_sense_12_in", type: "float32" },
+	0x33: { name: "v_sense_12", type: "float32" },
+	0x34: { name: "v_sense_hv_in", type: "float32" },
+	0x35: { name: "v_sense_hv", type: "float32" },
+	0x36: { name: "i_sense_5", type: "float32" },
+	0x37: { name: "i_sense_12", type: "float32" },
+	0x38: { name: "i_sense_hv", type: "float32" }
 };
 
 export function decodeTileMessage(msg) {
@@ -123,21 +143,11 @@ function decodeMessage(msg, registryMap) {
 		});
 	} else {
 		const view = new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength);
-		switch (entry.type) {
-			case "uint8":
-				value = view.getUint8(0);
-				break;
-			case "uint16":
-				value = view.getUint16(0, true);
-				break;
-			case "int16":
-				value = view.getInt16(0, true);
-				break;
-			case "float":
-				value = view.getFloat32(0, true);
-				break;
-			default:
-				value = [...dataBytes]; // fallback
+		let getterType = `get${entry.type.charAt(0).toUpperCase() + entry.type.slice(1)}`;
+		if (typeof view[getterType] === "function") {
+			value = view[getterType](0, true);
+		} else {
+			value = [...dataBytes]; // fallback
 		}
 	}
 

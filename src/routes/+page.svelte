@@ -166,6 +166,10 @@
 		sendMessage([0x00, 0x21, 0x01]);
 	}
 
+	function set_setpoint(tileId, coilIndex, setpoint) {
+		sendMessage([0x00, 0x80, tileId, coilIndex, setpoint & 0xff, (setpoint >> 8) & 0xff]);
+	}
+
 	function getMasterButtonState() {
 		if (!masterData) return { status: "Unavailable", class: "", function: null };
 
@@ -197,7 +201,7 @@
 					status: "Not Ready: Critical Issue",
 					action: "Arming Unavailable",
 					class: "red",
-					function: null
+					function: clear_faults
 				};
 			} else if (masterData.power_system_faults?.uv_5v && masterData.power_system_faults?.uv_12v) {
 				return {
@@ -211,7 +215,7 @@
 					status: "Not Ready: Critical Issue",
 					action: "Arming Unavailable",
 					class: "red",
-					function: null
+					function: clear_faults
 				};
 			}
 		}
@@ -512,6 +516,8 @@
 				<p>No MagTiles detected</p>
 			{/if}
 			{#each aliveTiles as tile}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<div
 					class="tile"
 					style:grid-column={tileCoordinates.byTileId?.[tile.id]?.x + 1 || undefined}
@@ -523,12 +529,10 @@
 					}}
 					class:selected={selectedTile?.id === tile.id}
 				>
-					<!-- <h2>Tile ID: {tile.id}</h2> -->
-					<!-- 9 coil divs, show temp, current_reading, and setpoint (rounded to 2 decimal places) -->
 					{#each Array(9) as _, i}
 						<div
 							class="coil"
-							style:--temp-level={(tile["coil_" + (i + 1) + "_temp"] - minTemp) / (maxTemp - minTemp)}
+							style:--temp-level={Math.min(Math.max(tile["coil_" + (i + 1) + "_temp"] / 100 - 25, 0), 75) / 75}
 							onclick={() => {
 								selectedCoilIndex = i + 1;
 							}}
@@ -580,7 +584,7 @@
 								const setpoint = Math.round(selectedSetpoint * 1000); // convert to mA
 								console.log("Sending setpoint:", tileId, coilIndex, setpoint);
 								// send message to tile
-								sendMessage([0x00, 0x80, tileId, coilIndex, setpoint & 0xff, (setpoint >> 8) & 0xff]);
+								set_setpoint(tileId, coilIndex, setpoint);
 							}
 						}}
 					>
@@ -616,8 +620,9 @@
 					{@render fault_entry("Overtemperature", data[selectedTile.id]?.slave_faults?.temp_fault)}
 					{@render fault_entry("Current Spike", data[selectedTile.id]?.slave_faults?.current_spike_fault)}
 					{@render fault_entry("Invalid Input Voltage Rail", data[selectedTile.id]?.slave_faults?.vsense_fault)}
+					{@render fault_entry("48V Rail Sag (Fuse Tripped)", data[selectedTile.id]?.slave_faults?.hv_sag_fault)}
 					{@render fault_entry("Invalid Setpoint Received", data[selectedTile.id]?.slave_faults?.invalid_value_fault)}
-					{@render fault_entry("Address Conflict Detected", data[selectedTile.id]?.slave_faults?.address_conflict)}
+					{@render fault_entry("Address Conflict Detected", data[selectedTile.id]?.slave_faults?.address_conflict_fault)}
 					{@render fault_entry("Communication Failure", data[selectedTile.id]?.slave_faults?.communication_fault)}
 				</div>
 				<div class="dataBox">
@@ -625,10 +630,25 @@
 					{@render meter_entry("5V Input", data[selectedTile.id]?.v_sense_5?.toFixed(2), "V")}
 					{@render meter_entry("12V Input", data[selectedTile.id]?.v_sense_12?.toFixed(2), "V")}
 					{@render meter_entry("48V Input", data[selectedTile.id]?.v_sense_hv?.toFixed(2), "V")}
-					{@render meter_entry("MCU Temperature", data[selectedTile.id]?.mcu_temp, "°C")}
+					{@render meter_entry("Master 48V Output", data[selectedTile.id]?.master_v_sense_hv?.toFixed(2), "V")}
 				</div>
 				<div class="dataBox">
-					<h2>Settings & Flags</h2>
+					<h2>Estimated Coil Resistance</h2>
+					{@render meter_entry("Coil 1", data[selectedTile.id]?.coil_1_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 2", data[selectedTile.id]?.coil_2_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 3", data[selectedTile.id]?.coil_3_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 4", data[selectedTile.id]?.coil_4_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 5", data[selectedTile.id]?.coil_5_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 6", data[selectedTile.id]?.coil_6_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 7", data[selectedTile.id]?.coil_7_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 8", data[selectedTile.id]?.coil_8_estimated_resistance / 1000, "Ω")}
+					{@render meter_entry("Coil 9", data[selectedTile.id]?.coil_9_estimated_resistance / 1000, "Ω")}
+				</div>
+				<div class="dataBox">
+					<h2>Tile Internals</h2>
+					{@render meter_entry("MCU Temperature", data[selectedTile.id]?.mcu_temp, "°C")}
+					{@render meter_entry("Main Loop Frequency", data[selectedTile.id]?.main_loop_freq / 100, "kHz")}
+					<h3>Flags</h3>
 					{@render flag_entry("Identify Request", data[selectedTile.id]?.slave_settings?.identify)}
 					{@render flag_entry("Local Fault Clear", data[selectedTile.id]?.slave_settings?.local_fault_clear)}
 					{@render flag_entry("Global Arm", data[selectedTile.id]?.global_state?.global_arm)}
@@ -742,9 +762,10 @@
 			position: absolute;
 			top: 66.7%;
 			left: 66.7%;
-			font-weight: bold;
+			font-weight: 600;
 			transform: translate(-50%, -50%);
 			text-shadow: 0 0 4px #000;
+			font-size: 1.5em;
 		}
 		.tileWarningIcon {
 			position: absolute;
