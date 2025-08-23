@@ -84,8 +84,9 @@ const tileRegistryMap = {
 	0x47: { name: "coil_8_estimated_resistance", type: "int16" },
 	0x48: { name: "coil_9_estimated_resistance", type: "int16" },
 
-	0xc0: { name: "mcu_temp", type: "uint16" },
-	0xc1: { name: "main_loop_freq", type: "uint32" }
+	0xc0: { name: "build_number", type: "uint16" },
+	0xc1: { name: "mcu_temp", type: "uint16" },
+	0xc2: { name: "main_loop_freq", type: "uint32" }
 };
 
 const masterRegistryMap = {

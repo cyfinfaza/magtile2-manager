@@ -142,11 +142,11 @@
 
 		try {
 			const message = new Uint8Array(bytes);
-			console.log("Sending message (pre-cobs):", message);
+			// console.log("Sending message (pre-cobs):", message);
 			const cobsEncoded = cobsEncode(message);
 			const toSend = new Uint8Array([...cobsEncoded, 0x00]);
 			await device.transferOut(3, toSend);
-			console.log("Message sent (post-cobs):", toSend);
+			// console.log("Message sent (post-cobs):", toSend);
 		} catch (e) {
 			console.error("Send failed:", e);
 		}
@@ -315,6 +315,213 @@
 		return { minTemp: min, maxTemp: max };
 	});
 
+	async function run_tile_test(tileId) {
+		// Test criteria and limits
+		const criteria = {
+			minBuildNumber: 20,
+			maxIdleCurrent: 0.01, // A
+			maxMcuTemp: 45, // °C
+			minLoopFreq: 25, // kHz
+			minInputVoltage: 35, // V
+			testCurrent: 1000, // mA (1A)
+			currentStabilizeWait: 400, // ms
+			minResistance: 3.75, // Ω
+			maxResistance: 4.25, // Ω
+			armWait: 600 // ms
+		};
+
+		if (data[tileId].test_active) {
+			data[tileId].test_active = false;
+			return;
+		} else {
+			data[tileId].test_active = true;
+		}
+		data[tileId].test_output = {
+			status: "pending",
+			status_message: "PENDING",
+			logs: []
+		};
+		function log(message, color = "normal") {
+			console.log(`Test [Tile ${tileId}] ${message}`);
+			data[tileId].test_output.logs.push({ message, color });
+		}
+		async function wait(ms) {
+			return new Promise((resolve) => setTimeout(resolve, ms));
+		}
+		// aware wait function:
+		// waits x ms while checking that the system has not entered fault, tile is still alive
+		async function aware_wait(ms) {
+			const start = performance.now();
+			while (performance.now() - start < ms) {
+				await wait(50);
+				if (!data[tileId]?.slave_status?.alive) {
+					throw new Error("Tile is no longer alive");
+				}
+				if (masterData?.power_system_faults && Object.values(masterData.power_system_faults).some(Boolean)) {
+					throw new Error("System entered a fault state");
+				}
+				if (!masterData?.power_switch_status?.hv_relay_on && masterData?.power_switch_status?.hv_ready) {
+					throw new Error("System disarmed unexpectedly");
+				}
+				if (!data[tileId]?.test_active) {
+					throw new Error("Aborted");
+				}
+			}
+		}
+
+		try {
+			const tileData = data[tileId];
+			let hasWarnings = false;
+			log("Performing initial checks...");
+			if (tileData.build_number < criteria.minBuildNumber) {
+				throw new Error(
+					`Tile build number is ${tileData.build_number}, version ${criteria.minBuildNumber} or above is required for this version of Quick Test`
+				);
+			} else {
+				log(`Tile build number is ${tileData.build_number} (>= ${criteria.minBuildNumber})`, "green");
+			}
+			if (masterData?.usb_interface_status?.cdc_active) {
+				log("WARNING: Virtual Serial Port is active, platform may be in use", "yellow");
+				hasWarnings = true;
+			} else {
+				log("VCP is inactive");
+			}
+			if (!masterData.power_switch_status?.hv_ready) {
+				throw new Error("HV is not ready, cannot proceed with test");
+			}
+			log("HV is ready");
+			log("Attempting to arm...");
+			arm();
+			await wait(criteria.armWait);
+			if (!masterData.power_switch_status?.hv_relay_on) {
+				throw new Error("HV relay failed to turn on");
+			}
+			log("Armed");
+
+			log("Performing post-arm checks...");
+
+			for (let i = 1; i <= 9; i++) {
+				const current = tileData[`coil_${i}_current_reading`] / 1000; // Convert from mA to A
+				if (current >= criteria.maxIdleCurrent) {
+					throw new Error(`Coil ${i} current is ${current.toFixed(3)}A, expected < ${criteria.maxIdleCurrent}A`);
+				}
+			}
+			log(`All coil currents are below ${criteria.maxIdleCurrent}A`, "green");
+
+			// MCU Temperature checks
+			if (tileData.mcu_temp >= criteria.maxMcuTemp) {
+				log(`WARNING: MCU temperature is ${tileData.mcu_temp}°C (expected < ${criteria.maxMcuTemp}°C)`, "yellow");
+				hasWarnings = true;
+			} else {
+				log(`MCU temperature is ${tileData.mcu_temp}°C (< ${criteria.maxMcuTemp}°C)`, "green");
+			}
+
+			// Main loop frequency checks
+			const loopFreq = tileData.main_loop_freq / 100;
+			if (loopFreq <= criteria.minLoopFreq) {
+				log(`WARNING: Main loop frequency is ${loopFreq}kHz (expected > ${criteria.minLoopFreq}kHz)`, "yellow");
+				hasWarnings = true;
+			} else {
+				log(`Main loop frequency is ${loopFreq}kHz (> ${criteria.minLoopFreq}kHz)`, "green");
+			}
+
+			// Input voltage checks
+			const input_voltage = (tileData?.v_sense_hv ?? 0).toFixed(2);
+			if (input_voltage < criteria.minInputVoltage) {
+				log(`WARNING: Input voltage is ${input_voltage}V (expected >= ${criteria.minInputVoltage}V)`, "yellow");
+				hasWarnings = true;
+			} else {
+				log(`Input voltage is ${input_voltage}V (>= ${criteria.minInputVoltage}V)`, "green");
+			}
+
+			log(`Testing resistance of each coil at ${criteria.testCurrent / 1000}A...`);
+
+			const resistanceResults = [];
+
+			for (let coilIndex = 0; coilIndex < 9; coilIndex++) {
+				// Set test current
+				set_setpoint(tileId, coilIndex, criteria.testCurrent);
+
+				// Wait for current to stabilize
+				await aware_wait(criteria.currentStabilizeWait);
+
+				// Read resistance
+				const resistance = data[tileId][`coil_${coilIndex + 1}_estimated_resistance`] / 1000; // Convert to ohms
+
+				// Turn off coil
+				set_setpoint(tileId, coilIndex, 0);
+
+				// Check resistance tolerance
+				const passed = resistance >= criteria.minResistance && resistance <= criteria.maxResistance;
+				resistanceResults.push({ coil: coilIndex, resistance, passed });
+
+				if (passed) {
+					log(`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω - PASS`, "green");
+				} else {
+					log(
+						`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω - FAIL (expected ${criteria.minResistance}-${criteria.maxResistance}Ω)`,
+						"red"
+					);
+				}
+			}
+
+			// Summary
+			const passedCoils = resistanceResults.filter((r) => r.passed).length;
+			const failedCoils = resistanceResults.filter((r) => !r.passed);
+
+			log(`Coil resistance test summary: ${passedCoils}/9 coils passed`);
+
+			if (failedCoils.length > 0) {
+				// const failedList = failedCoils.map((c) => `Coil ${c.coil}: ${c.resistance.toFixed(3)}Ω`).join(", ");
+				throw new Error(`${failedCoils.length} coil(s) failed resistance test`);
+			}
+
+			if (hasWarnings) {
+				log("All tests passed with warnings", "yellow");
+				data[tileId].test_output.status = "passed_with_warnings";
+				data[tileId].test_output.status_message = "PASS WITH WARNINGS";
+			} else {
+				log("All tests passed", "green");
+				data[tileId].test_output.status = "passed";
+				data[tileId].test_output.status_message = "PASS";
+			}
+		} catch (error) {
+			log(`Test Failed: ${error.message}`, "red");
+			data[tileId].test_output.status = "failed";
+			data[tileId].test_output.status_message = "FAIL";
+		} finally {
+			try {
+				// Turn off all coils
+				for (let coilIndex = 0; coilIndex < 9; coilIndex++) {
+					set_setpoint(tileId, coilIndex, 0);
+				}
+				disarm();
+			} catch (error) {
+				log(`Cleanup error: ${error.message}`, "red");
+			}
+			data[tileId].test_active = false;
+		}
+	}
+
+	function autoscroll(node) {
+		const scroll = () => {
+			node.scrollTop = node.scrollHeight;
+		};
+
+		// Run once on mount
+		scroll();
+
+		// Observe size/content changes
+		const observer = new MutationObserver(scroll);
+		observer.observe(node, { childList: true, subtree: true });
+
+		return {
+			destroy() {
+				observer.disconnect();
+			}
+		};
+	}
+
 	onMount(() => {
 		// console.log a message highlighted in green saying Type (bold)data(bold) to see full data report
 		webUsbAvailable = !!navigator.usb;
@@ -330,6 +537,7 @@
 		window.tileCoordinates = () => $state.snapshot(tileCoordinates);
 		window.aliveTiles = () => $state.snapshot(aliveTiles);
 		window.buttonState = () => $state.snapshot(buttonState);
+		window.run_tile_test = run_tile_test;
 		// interval to auto connect without prompt every 1 second, if not connected
 		const autoConnectInterval = setInterval(() => {
 			if (!connected && autoConnectActive) {
@@ -608,6 +816,31 @@
 			{#key data[selectedTile.id]}
 				<!-- <pre>{selectedTile && JSON.stringify(selectedTile, null, 2)}</pre> -->
 				<div class="dataBox">
+					<h2>Quick Test</h2>
+					<button
+						class="accent"
+						class:cyan={data[selectedTile.id]?.test_output?.status === "pending"}
+						class:yellow={data[selectedTile.id]?.test_output?.status === "passed_with_warnings"}
+						class:green={data[selectedTile.id]?.test_output?.status === "passed"}
+						class:red={data[selectedTile.id]?.test_output?.status === "failed"}
+						onclick={() => run_tile_test(selectedTile.id)}
+					>
+						{#if data[selectedTile.id]?.test_output?.status_message}
+							{data[selectedTile.id].test_output.status_message} <br />
+							<small>(click to {data[selectedTile.id].test_output.status === "pending" ? "abort" : "retry"})</small>
+						{:else}
+							Run Test
+						{/if}
+					</button>
+					{#if data[selectedTile.id]?.test_output?.logs?.length > 0}
+						<div class="test-logs" use:autoscroll>
+							{#each data[selectedTile.id].test_output.logs as log}
+								<div class="test-log-entry {log.color || 'normal'}">{log.message || log}</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+				<div class="dataBox">
 					<h2>Tile Status</h2>
 					{@render greenred_entry("Alive", data[selectedTile.id]?.slave_status?.alive, "YES", "NO")}
 					{@render greenred_entry("Ready to Arm", data[selectedTile.id]?.slave_status?.arm_ready, "YES", "NO")}
@@ -646,6 +879,7 @@
 				</div>
 				<div class="dataBox">
 					<h2>Tile Internals</h2>
+					{@render meter_entry("Build Number", data[selectedTile.id]?.build_number, "")}
 					{@render meter_entry("MCU Temperature", data[selectedTile.id]?.mcu_temp, "°C")}
 					{@render meter_entry("Main Loop Frequency", data[selectedTile.id]?.main_loop_freq / 100, "kHz")}
 					<h3>Flags</h3>
@@ -797,6 +1031,34 @@
 		}
 		.notConnected & {
 			opacity: var(--not-connected-opacity);
+		}
+		.test-logs {
+			max-height: 200px;
+			overflow: auto;
+			border: 1px solid var(--fg2);
+			border-radius: var(--spacing-half);
+			padding: var(--spacing-half);
+			background-color: #0004;
+			display: flex;
+			flex-direction: column;
+		}
+		.test-log-entry {
+			font-family: monospace;
+			font-size: 0.9em;
+			padding: 2px 0;
+			border-bottom: none;
+			&.normal {
+				color: var(--text);
+			}
+			&.green {
+				color: #0f4;
+			}
+			&.yellow {
+				color: #ff0;
+			}
+			&.red {
+				color: #f00;
+			}
 		}
 	}
 </style>
