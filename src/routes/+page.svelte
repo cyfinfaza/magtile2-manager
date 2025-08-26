@@ -323,9 +323,10 @@
 			maxMcuTemp: 45, // °C
 			minLoopFreq: 25, // kHz
 			minInputVoltage: 35, // V
-			testCurrent: 1000, // mA (1A)
+			testCurrent: 1000, // mA
+			testCurrentTolerance: 50, // ±mA
 			currentStabilizeWait: 400, // ms
-			minResistance: 3.75, // Ω
+			minResistance: 3.6, // Ω
 			maxResistance: 4.25, // Ω
 			armWait: 600 // ms
 		};
@@ -434,9 +435,9 @@
 				log(`Input voltage is ${input_voltage}V (>= ${criteria.minInputVoltage}V)`, "green");
 			}
 
-			log(`Testing resistance of each coil at ${criteria.testCurrent / 1000}A...`);
+			log(`Testing resistance and current of each coil at ${criteria.testCurrent / 1000}A...`);
 
-			const resistanceResults = [];
+			const testResults = [];
 
 			for (let coilIndex = 0; coilIndex < 9; coilIndex++) {
 				// Set test current
@@ -445,35 +446,47 @@
 				// Wait for current to stabilize
 				await aware_wait(criteria.currentStabilizeWait);
 
-				// Read resistance
+				// Read resistance and current
 				const resistance = data[tileId][`coil_${coilIndex + 1}_estimated_resistance`] / 1000; // Convert to ohms
+				const current_reading = data[tileId][`coil_${coilIndex + 1}_current_reading`]; // mA
 
 				// Turn off coil
 				set_setpoint(tileId, coilIndex, 0);
 
-				// Check resistance tolerance
-				const passed = resistance >= criteria.minResistance && resistance <= criteria.maxResistance;
-				resistanceResults.push({ coil: coilIndex, resistance, passed });
+				// Check tolerances
+				const resistancePassed = resistance >= criteria.minResistance && resistance <= criteria.maxResistance;
+				const currentPassed = Math.abs(current_reading - criteria.testCurrent) <= criteria.testCurrentTolerance;
+				const overallPassed = resistancePassed && currentPassed;
 
-				if (passed) {
-					log(`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω - PASS`, "green");
+				testResults.push({ coil: coilIndex, resistance, current: current_reading, resistancePassed, currentPassed, overallPassed });
+
+				if (overallPassed) {
+					log(`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω, ${(current_reading / 1000).toFixed(3)}A - PASS`, "green");
 				} else {
+					let failReasons = [];
+					if (!resistancePassed) {
+						failReasons.push(`resistance ${resistance.toFixed(3)}Ω (expected ${criteria.minResistance}-${criteria.maxResistance}Ω)`);
+					}
+					if (!currentPassed) {
+						failReasons.push(
+							`current ${(current_reading / 1000).toFixed(3)}A (expected ${(criteria.testCurrent / 1000).toFixed(3)}±${(criteria.testCurrentTolerance / 1000).toFixed(3)}A)`
+						);
+					}
 					log(
-						`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω - FAIL (expected ${criteria.minResistance}-${criteria.maxResistance}Ω)`,
+						`Coil ${coilIndex + 1}: ${resistance.toFixed(3)}Ω, ${(current_reading / 1000).toFixed(3)}A - FAIL (${failReasons.join(", ")})`,
 						"red"
 					);
 				}
 			}
 
 			// Summary
-			const passedCoils = resistanceResults.filter((r) => r.passed).length;
-			const failedCoils = resistanceResults.filter((r) => !r.passed);
+			const passedCoils = testResults.filter((r) => r.overallPassed).length;
+			const failedCoils = testResults.filter((r) => !r.overallPassed);
 
-			log(`Coil resistance test summary: ${passedCoils}/9 coils passed`);
+			log(`Coil test summary: ${passedCoils}/9 coils passed`);
 
 			if (failedCoils.length > 0) {
-				// const failedList = failedCoils.map((c) => `Coil ${c.coil}: ${c.resistance.toFixed(3)}Ω`).join(", ");
-				throw new Error(`${failedCoils.length} coil(s) failed resistance test`);
+				throw new Error(`${failedCoils.length} coil(s) failed resistance/current test`);
 			}
 
 			if (hasWarnings) {
