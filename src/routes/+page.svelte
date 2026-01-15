@@ -19,6 +19,17 @@
 	let selectedCoilIndex = $state(null);
 	let selectedSetpoint = $state(null);
 
+	let flashSelectedTile = $state(false);
+
+	// --- Flash Selected Tile Effect ---
+	$effect(() => {
+		if (flashSelectedTile && selectedTile?.id) {
+			sendMessage([0x00, 0x82, selectedTile.id]);
+		} else if (!flashSelectedTile) {
+			sendMessage([0x00, 0x82, 0]);
+		}
+	});
+
 	// --- Start WebUSB Reading Loop ---
 	async function connectToDevice(prompt = true) {
 		if (navigator.usb) {
@@ -778,6 +789,7 @@
 	</div>
 	<div class="tilePanel">
 		<h2>Tile Data</h2>
+		<button onclick={() => (flashSelectedTile = !flashSelectedTile)}>Flash Selected Tile: {flashSelectedTile ? "On" : "Off"}</button>
 		{#if selectedTile}
 			<div style="display: flex; flex-direction: column; gap: var(--spacing);">
 				<!-- labelled inputs for coil index, tile id, and setpoint, then button to send -->
