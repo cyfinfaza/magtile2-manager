@@ -546,6 +546,14 @@
 		};
 	}
 
+	function enter_bootloader_all() {
+		sendMessage([0x00, 0xd0]);
+	}
+
+	function toggle_debug_leds() {
+		sendMessage([0x00, 0xd1]);
+	}
+
 	onMount(() => {
 		// console.log a message highlighted in green saying Type (bold)data(bold) to see full data report
 		webUsbAvailable = !!navigator.usb;
@@ -730,6 +738,8 @@
 			{@render flag_entry("Global Arm", masterData?.global_state?.global_arm)}
 			{@render flag_entry("Global Fault Clear", masterData?.global_state?.global_fault_clear)}
 		</div>
+		<button class="masterDebugTool" onclick={() => enter_bootloader_all()}> Jump all tiles to bootloader </button>
+		<button class="masterDebugTool" onclick={() => toggle_debug_leds()}> Toggle debug LEDs </button>
 	</div>
 	<div
 		class="tileViewer"
@@ -942,6 +952,12 @@
 		flex-direction: column;
 		gap: var(--spacing);
 		overflow: auto;
+	}
+	.masterDebugTool {
+		.notConnected & {
+			opacity: var(--not-connected-opacity);
+			pointer-events: none;
+		}
 	}
 	.tileViewer {
 		flex: 1;
